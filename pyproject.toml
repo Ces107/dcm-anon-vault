@@ -1,0 +1,73 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "dcm-anon-vault"
+version = "0.1.0"
+description = "Hosted DICOM anonymization API — single-tenant SaaS wrapping dcm-anon"
+readme = "README.md"
+license = {text = "MIT"}
+requires-python = ">=3.10"
+authors = [{name = "plusUltra Labs", email = "plusultra.dev@proton.me"}]
+keywords = [
+    "dicom", "anonymization", "api", "saas", "medical-imaging", "phi",
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Healthcare Industry",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+]
+dependencies = [
+    "fastapi>=0.100",
+    "uvicorn[standard]>=0.20",
+    "python-multipart>=0.0.7",
+    "pydantic>=2",
+    "sqlalchemy>=2.0",
+    "stripe>=7",
+    # dcm-anon>=0.3.1  # TODO: uncomment after PyPI publish; see vendor/ for local copy
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "httpx>=0.24",
+    "ruff>=0.4",
+    "mypy>=1.8",
+    "build>=1.0",
+    "pydicom>=2.4",
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "C4", "RUF"]
+ignore = [
+    "E501",
+    "B904",
+    "B008",  # FastAPI Depends() in defaults is intentional
+]
+
+[tool.mypy]
+python_version = "3.10"
+strict = true
+ignore_missing_imports = true
+warn_return_any = true
+warn_unused_configs = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+addopts = "--tb=short"
