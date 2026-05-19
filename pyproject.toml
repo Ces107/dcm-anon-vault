@@ -4,14 +4,15 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "dcm-anon-vault"
-version = "0.1.0"
-description = "Hosted DICOM anonymization API — single-tenant SaaS wrapping dcm-anon"
+version = "0.2.0"
+description = "Hosted single-tenant DICOM pseudonymization API wrapping dcm-anonymizer (PS3.15 Basic Profile)"
 readme = "README.md"
 license = {text = "MIT"}
 requires-python = ">=3.10"
-authors = [{name = "plusUltra Labs", email = "plusultra.dev@proton.me"}]
+authors = [{name = "César Pereiro García", email = "plusultra.dev@proton.me"}]
 keywords = [
-    "dicom", "anonymization", "api", "saas", "medical-imaging", "phi",
+    "dicom", "pseudonymization", "anonymization", "api", "saas",
+    "medical-imaging", "phi", "ps3.15", "research",
 ]
 classifiers = [
     "Development Status :: 3 - Alpha",
@@ -24,24 +25,31 @@ classifiers = [
     "Programming Language :: Python :: 3.12",
 ]
 dependencies = [
-    "fastapi>=0.100",
-    "uvicorn[standard]>=0.20",
-    "python-multipart>=0.0.7",
-    "pydantic>=2",
-    "sqlalchemy>=2.0",
-    "stripe>=7",
-    # dcm-anon>=0.3.1  # TODO: uncomment after PyPI publish; see vendor/ for local copy
+    "fastapi>=0.110,<1.0",
+    "uvicorn[standard]>=0.27,<1.0",
+    "python-multipart>=0.0.9,<1.0",
+    "pydantic>=2.6,<3.0",
+    "sqlalchemy>=2.0,<3.0",
+    "stripe>=8.0,<13.0",
+    "pydicom>=3.0.2,<4.0",
+    "dcm-anonymizer>=0.4.0,<0.5",
 ]
 
 [project.optional-dependencies]
 dev = [
     "pytest>=8.0",
-    "httpx>=0.24",
+    "httpx>=0.27",
     "ruff>=0.4",
     "mypy>=1.8",
     "build>=1.0",
-    "pydicom>=2.4",
+    "pip-audit>=2.7",
 ]
+
+[project.urls]
+Homepage = "https://github.com/Ces107/dcm-anon-vault"
+Source = "https://github.com/Ces107/dcm-anon-vault"
+"Bug Tracker" = "https://github.com/Ces107/dcm-anon-vault/issues"
+Engine = "https://github.com/Ces107/dcm-anon"
 
 [tool.setuptools.packages.find]
 where = ["src"]

@@ -3,33 +3,35 @@ FROM python:3.12-slim AS builder
 
 WORKDIR /build
 COPY pyproject.toml .
-# Install runtime deps only
 RUN pip install --no-cache-dir --prefix=/install \
-    "fastapi>=0.100" \
-    "uvicorn[standard]>=0.20" \
-    "python-multipart>=0.0.7" \
-    "pydantic>=2" \
-    "sqlalchemy>=2.0" \
-    "stripe>=7" \
-    "pydicom>=2.4"
+    "fastapi>=0.110,<1.0" \
+    "uvicorn[standard]>=0.27,<1.0" \
+    "python-multipart>=0.0.9,<1.0" \
+    "pydantic>=2.6,<3.0" \
+    "sqlalchemy>=2.0,<3.0" \
+    "stripe>=8.0,<13.0" \
+    "pydicom>=3.0.2,<4.0" \
+    "dcm-anonymizer>=0.4.0,<0.5"
 
 # Stage 2: runtime image
 FROM python:3.12-slim
 
+# Create a non-root user; container must not run as root.
+RUN groupadd -r app && useradd -r -g app -d /app -s /usr/sbin/nologin app \
+    && mkdir -p /app /data \
+    && chown -R app:app /app /data
+
 WORKDIR /app
 
-# Copy installed packages from builder
 COPY --from=builder /install /usr/local
+COPY --chown=app:app src/ ./src/
 
-# Copy source
-COPY src/ ./src/
+ENV DCM_DB_URL=sqlite:////data/vault.db \
+    PYTHONPATH=/app/src \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1
 
-# Create data directory for SQLite volume mount
-RUN mkdir -p /data
-
-ENV DCM_DB_URL=sqlite:////data/vault.db
-ENV PYTHONPATH=/app/src
-
+USER app
 EXPOSE 8080
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \

@@ -9,35 +9,49 @@ from pathlib import Path
 from fastapi import APIRouter, Depends, HTTPException, Request, UploadFile, status
 from fastapi.responses import Response
 from sqlalchemy import func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from dcm_anon_vault.auth import require_customer
-from dcm_anon_vault.core import anonymize_files_to_zip
+from dcm_anon_vault.auth import require_api_key_hash, require_customer
+from dcm_anon_vault.core import BurnedInPHIError, anonymize_files_to_zip
 from dcm_anon_vault.db import get_db
 from dcm_anon_vault.models import AnonymizationEvent, Customer
 
 router = APIRouter()
 
 _FREE_TIER_MONTHLY_LIMIT = 50
+_MAX_UPLOAD_BYTES = 100 * 1024 * 1024  # 100 MB per request (multipart total)
+_STREAM_CHUNK = 64 * 1024
 
 
-def _get_or_create_customer(db: Session, customer_id: str) -> Customer:
-    """Return existing Customer row or create a new free-tier one."""
-    stmt = select(Customer).where(Customer.api_key_hash == customer_id)
+def _get_or_create_customer(
+    db: Session, *, customer_id: str, api_key_hash: str
+) -> Customer:
+    """Return or create a Customer keyed by ``api_key_hash``.
+
+    Race-safe: if two workers create concurrently, the second hits the
+    unique constraint, rolls back, and re-selects the winner's row.
+    """
+    stmt = select(Customer).where(Customer.api_key_hash == api_key_hash)
     existing = db.execute(stmt).scalar_one_or_none()
     if existing is not None:
         return existing
-    # Create a stub row; api_key_hash stores the customer_id string here because
-    # the middleware has already validated the raw key — we only need an opaque ID.
-    new_customer = Customer(api_key_hash=customer_id, tier="free")
+
+    new_customer = Customer(
+        api_key_hash=api_key_hash, customer_id_string=customer_id, tier="free"
+    )
     db.add(new_customer)
-    db.commit()
-    db.refresh(new_customer)
-    return new_customer
+    try:
+        db.commit()
+        db.refresh(new_customer)
+        return new_customer
+    except IntegrityError:
+        db.rollback()
+        return db.execute(stmt).scalar_one()
 
 
 def _monthly_file_count(db: Session, customer_id_pk: int) -> int:
-    """Count files anonymized by this customer in the current UTC calendar month."""
+    """Sum file_count for the current UTC calendar month."""
     now = datetime.now(timezone.utc)
     month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
     stmt = (
@@ -49,23 +63,46 @@ def _monthly_file_count(db: Session, customer_id_pk: int) -> int:
     return int(result) if result is not None else 0
 
 
+def _safe_filename(name: str | None) -> str:
+    """Strip directory components from an attacker-controlled filename."""
+    if not name:
+        return "upload.dcm"
+    return Path(name).name or "upload.dcm"
+
+
+def _enforce_size_cap(request: Request) -> None:
+    """Reject requests whose Content-Length exceeds the cap."""
+    cl = request.headers.get("content-length")
+    if cl is not None:
+        try:
+            if int(cl) > _MAX_UPLOAD_BYTES:
+                raise HTTPException(
+                    status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+                    detail=f"Upload exceeds {_MAX_UPLOAD_BYTES // (1024 * 1024)} MB cap.",
+                )
+        except ValueError:
+            pass  # malformed header — let body parser handle it
+
+
 @router.post("/v1/anonymize")
 def anonymize(
     request: Request,
     files: list[UploadFile],
     customer_id: str = Depends(require_customer),
+    api_key_hash: str = Depends(require_api_key_hash),
     db: Session = Depends(get_db),
 ) -> Response:
-    """Anonymize uploaded DICOM files.
+    """Pseudonymize uploaded DICOM files (PS3.15 Basic Profile).
 
-    Accepts one or more DICOM files as multipart form data.  Returns a ZIP
-    archive containing anonymized DICOMs and an audit log.
-
-    Rate-limits free-tier customers to 50 files per calendar month.
+    Returns a ZIP archive of the scrubbed DICOMs. Rate-limits free-tier
+    customers to 50 files / UTC calendar month. Rejects files declaring
+    ``BurnedInAnnotation == YES`` (no Clean Pixel Data Option).
     """
-    customer = _get_or_create_customer(db, customer_id)
+    _enforce_size_cap(request)
+    customer = _get_or_create_customer(
+        db, customer_id=customer_id, api_key_hash=api_key_hash
+    )
 
-    # Rate-limit check for free tier
     if customer.tier == "free":
         used = _monthly_file_count(db, customer.id)
         remaining = _FREE_TIER_MONTHLY_LIMIT - used
@@ -74,9 +111,9 @@ def anonymize(
                 status_code=status.HTTP_429_TOO_MANY_REQUESTS,
                 detail=(
                     f"Free tier limit of {_FREE_TIER_MONTHLY_LIMIT} files/month reached. "
-                    "Upgrade to Pro at /v1/billing/checkout-session."
+                    "Upgrade via POST /v1/billing/checkout-session."
                 ),
-                headers={"Retry-After": "2592000"},  # ~30 days
+                headers={"Retry-After": "2592000"},
             )
         if len(files) > remaining:
             raise HTTPException(
@@ -88,19 +125,48 @@ def anonymize(
                 headers={"Retry-After": "2592000"},
             )
 
-    # Write uploads to a temp directory and anonymize
     with tempfile.TemporaryDirectory() as tmp:
         tmp_path = Path(tmp)
         src_paths: list[Path] = []
+        bytes_seen = 0
         for upload in files:
-            filename = upload.filename or "upload.dcm"
+            filename = _safe_filename(upload.filename)
             dest = tmp_path / filename
-            dest.write_bytes(upload.file.read())
+            with dest.open("wb") as out:
+                while True:
+                    chunk = upload.file.read(_STREAM_CHUNK)
+                    if not chunk:
+                        break
+                    bytes_seen += len(chunk)
+                    if bytes_seen > _MAX_UPLOAD_BYTES:
+                        raise HTTPException(
+                            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+                            detail=(
+                                f"Upload exceeds {_MAX_UPLOAD_BYTES // (1024 * 1024)} MB cap."
+                            ),
+                        )
+                    out.write(chunk)
             src_paths.append(dest)
 
-        zip_bytes, summary = anonymize_files_to_zip(src_paths)
+        try:
+            zip_bytes, summary = anonymize_files_to_zip(
+                src_paths, customer_salt=api_key_hash
+            )
+        except BurnedInPHIError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)
+            ) from exc
 
-    # Persist the event
+    if summary.files_rejected_burned_in == len(files) and summary.files_processed == 0:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=(
+                "All uploaded files declared BurnedInAnnotation=YES. "
+                "The PS3.15 Clean Pixel Data Option is not supported on this "
+                "instance; remove or redact burned-in pixels before upload."
+            ),
+        )
+
     event = AnonymizationEvent(
         customer_id=customer.id,
         file_count=summary.files_processed,
@@ -109,8 +175,14 @@ def anonymize(
     db.add(event)
     db.commit()
 
-    return Response(
-        content=zip_bytes,
-        media_type="application/zip",
-        headers={"Content-Disposition": "attachment; filename=anonymized.zip"},
-    )
+    headers = {
+        "Content-Disposition": "attachment; filename=anonymized.zip",
+        "X-Files-Processed": str(summary.files_processed),
+        "X-Files-Failed": str(summary.files_failed),
+        "X-Files-Rejected-BurnedIn": str(summary.files_rejected_burned_in),
+        "X-Audit-Sha256": summary.audit_sha256,
+    }
+    return Response(content=zip_bytes, media_type="application/zip", headers=headers)
+
+
+__all__ = ["anonymize", "router"]

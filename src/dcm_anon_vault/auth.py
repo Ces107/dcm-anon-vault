@@ -1,13 +1,15 @@
-"""API key authentication middleware for dcm-anon-vault.
+"""API-key authentication middleware.
 
-Reads DCM_API_KEYS env var (comma-separated customer_id:key pairs), hashes each
-key with SHA-256, and validates the X-API-Key header against the hash table.
-Attaches request.state.customer_id on success; returns 401 on failure.
+Reads ``DCM_API_KEYS`` (``id1:key1,id2:key2``) at startup, indexes by
+SHA-256(key), and validates the ``X-API-Key`` header. On success attaches
+both ``request.state.customer_id`` (the human-friendly string) and
+``request.state.api_key_hash`` (the column value used by the DB).
 """
 
 from __future__ import annotations
 
 import hashlib
+import hmac
 import os
 
 from fastapi import HTTPException, Request, status
@@ -17,7 +19,7 @@ from starlette.responses import Response
 
 
 def _parse_api_keys(raw: str) -> dict[str, str]:
-    """Parse 'id1:key1,id2:key2' into {sha256(key): customer_id}."""
+    """Parse ``'id1:key1,id2:key2'`` into ``{sha256(key): customer_id}``."""
     result: dict[str, str] = {}
     for pair in raw.split(","):
         pair = pair.strip()
@@ -33,17 +35,8 @@ def _parse_api_keys(raw: str) -> dict[str, str]:
     return result
 
 
-def _load_key_map() -> dict[str, str]:
-    raw = os.environ.get("DCM_API_KEYS", "")
-    return _parse_api_keys(raw)
-
-
-# ---------------------------------------------------------------------------
-# Public helpers (used by tests and routes)
-# ---------------------------------------------------------------------------
-
 def parse_api_keys(raw: str) -> dict[str, str]:
-    """Public wrapper around _parse_api_keys for testability."""
+    """Public wrapper around :func:`_parse_api_keys`."""
     return _parse_api_keys(raw)
 
 
@@ -52,15 +45,28 @@ def hash_key(raw_key: str) -> str:
     return hashlib.sha256(raw_key.encode()).hexdigest()
 
 
-# Paths that do not require authentication
-_OPEN_PATHS = {"/health", "/openapi.json", "/docs", "/redoc", "/v1/billing/webhook"}
+_OPEN_PATHS = {"/health", "/v1/billing/webhook"}
+# /docs, /redoc, /openapi.json are gated by DCM_OPEN_DOCS=1 (default off).
+
+
+def _docs_open() -> bool:
+    return os.environ.get("DCM_OPEN_DOCS", "").lower() in {"1", "true", "yes"}
+
+
+def _docs_paths() -> set[str]:
+    return {"/docs", "/redoc", "/openapi.json"} if _docs_open() else set()
+
+
+def _load_key_map() -> dict[str, str]:
+    raw = os.environ.get("DCM_API_KEYS", "")
+    return _parse_api_keys(raw)
 
 
 class APIKeyMiddleware(BaseHTTPMiddleware):
-    """Starlette middleware that validates X-API-Key on every protected route."""
+    """Validates X-API-Key on every protected route."""
 
     async def dispatch(self, request: Request, call_next: RequestResponseEndpoint) -> Response:
-        if request.url.path in _OPEN_PATHS:
+        if request.url.path in _OPEN_PATHS or request.url.path in _docs_paths():
             return await call_next(request)
 
         api_key = request.headers.get("X-API-Key", "")
@@ -79,13 +85,31 @@ class APIKeyMiddleware(BaseHTTPMiddleware):
                 content={"detail": "Invalid API key"},
             )
 
+        # Defence-in-depth: confirm the lookup with a constant-time compare
+        # against the canonical hash (the dict lookup already matched, this
+        # just hardens against future code that bypasses the hash).
+        if not any(hmac.compare_digest(stored, key_hash) for stored in key_map):
+            return JSONResponse(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                content={"detail": "Invalid API key"},
+            )
+
         request.state.customer_id = customer_id
+        request.state.api_key_hash = key_hash
         return await call_next(request)
 
 
 def require_customer(request: Request) -> str:
-    """FastAPI dependency: return customer_id or raise 401."""
+    """FastAPI dependency: return customer_id (human-friendly) or raise 401."""
     customer_id: str | None = getattr(request.state, "customer_id", None)
     if not customer_id:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Not authenticated")
     return customer_id
+
+
+def require_api_key_hash(request: Request) -> str:
+    """FastAPI dependency: return SHA-256(api_key) or raise 401."""
+    key_hash: str | None = getattr(request.state, "api_key_hash", None)
+    if not key_hash:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Not authenticated")
+    return key_hash
