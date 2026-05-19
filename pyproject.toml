@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "dcm-anon-vault"
-version = "0.2.0"
+version = "0.2.1"
 description = "Hosted single-tenant DICOM pseudonymization API wrapping dcm-anonymizer (PS3.15 Basic Profile)"
 readme = "README.md"
 license = {text = "MIT"}
