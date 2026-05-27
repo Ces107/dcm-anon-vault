@@ -16,3 +16,9 @@ build/
 .coverage
 .coverage.*
 htmlcov/
+demo/audit/
+demo/demo-vault.db
+demo/server.log
+demo/result.zip
+demo/sample_*.dcm
+nohup.out
