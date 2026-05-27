@@ -1,11 +1,15 @@
 """Stripe billing routes.
 
 POST /v1/billing/checkout-session — Stripe Checkout for tier upgrade.
-POST /v1/billing/webhook         — handle Stripe webhook events.
+POST /v1/billing/portal-session   — Stripe Customer Portal for self-service cancel/update.
+POST /v1/billing/webhook          — handle Stripe webhook events.
 
 Webhook signature verification is MANDATORY. The service refuses to
 process unsigned events. Idempotency is enforced via the
 ``webhook_events`` table.
+
+Handled webhook events: checkout.session.completed,
+customer.subscription.deleted, customer.subscription.updated.
 """
 
 from __future__ import annotations
@@ -79,6 +83,14 @@ class CheckoutResponse(BaseModel):
     session_id: str
 
 
+class PortalSessionRequest(BaseModel):
+    return_url: str
+
+
+class PortalSessionResponse(BaseModel):
+    portal_url: str
+
+
 @router.post("/v1/billing/checkout-session", response_model=CheckoutResponse)
 def create_checkout_session(
     body: CheckoutRequest,
@@ -128,6 +140,57 @@ def create_checkout_session(
         raise
     except Exception as exc:
         LOG.exception("Stripe checkout session creation failed")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=f"Stripe error: {exc}"
+        ) from exc
+
+
+@router.post("/v1/billing/portal-session", response_model=PortalSessionResponse)
+def create_portal_session(
+    body: PortalSessionRequest,
+    customer_id: str = Depends(require_customer),
+    api_key_hash: str = Depends(require_api_key_hash),
+    db: Session = Depends(get_db),
+) -> PortalSessionResponse:
+    """Create a Stripe Billing Portal session for self-service cancel / update.
+
+    Required by EU consumer-protection law: a customer who subscribed via
+    Stripe Checkout must have a self-serve cancellation path. This endpoint
+    issues a short-lived URL to the Stripe-hosted Customer Portal where the
+    end customer can update payment methods, change plan, view invoices,
+    and cancel. Cancellation is reflected in the app via the
+    ``customer.subscription.deleted`` webhook handler.
+    """
+    key = _stripe_key()
+    if not key:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=_STRIPE_NOT_CONFIGURED
+        )
+
+    stmt = select(Customer).where(Customer.api_key_hash == api_key_hash)
+    customer = db.execute(stmt).scalar_one_or_none()
+    if customer is None or not customer.stripe_customer_id:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=(
+                "No Stripe customer is on file for this API key. "
+                "Complete a checkout first via POST /v1/billing/checkout-session."
+            ),
+        )
+
+    try:
+        import stripe as stripe_lib
+
+        stripe_lib.api_key = key
+        session = stripe_lib.billing_portal.Session.create(
+            customer=customer.stripe_customer_id,
+            return_url=body.return_url,
+        )
+        return PortalSessionResponse(portal_url=str(session.url or ""))
+    except HTTPException:
+        raise
+    except Exception as exc:
+        LOG.exception("Stripe portal session creation failed")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=f"Stripe error: {exc}"
         ) from exc
@@ -207,6 +270,44 @@ async def stripe_webhook(
         else:
             LOG.warning("checkout.session.completed without customer metadata")
 
+    elif event_type == "customer.subscription.deleted":
+        # Subscription cancelled (end of period or immediate). Drop the
+        # customer back to the free tier so that the in-app quota matches
+        # the billing reality. Required by EU consumer-protection law: a
+        # cancellation in Stripe must be reflected in the app without
+        # operator intervention.
+        sub_obj = event["data"]["object"]
+        stripe_customer = sub_obj.get("customer")
+        if stripe_customer:
+            _flip_tier_by_stripe_customer(db, str(stripe_customer), "free")
+        else:
+            LOG.warning("customer.subscription.deleted without customer id")
+
+    elif event_type == "customer.subscription.updated":
+        # Subscription state change. The most common cases:
+        #   - status flips to "canceled" or "incomplete_expired" → free.
+        #   - status flips back to "active" or "trialing" → pro.
+        # We do not infer tier from price-id changes here; the
+        # checkout.session.completed handler is responsible for the initial
+        # tier set, and downgrades are handled by subscription.deleted.
+        sub_obj = event["data"]["object"]
+        stripe_customer = sub_obj.get("customer")
+        sub_status = str(sub_obj.get("status") or "")
+        if stripe_customer:
+            if sub_status in ("canceled", "incomplete_expired", "unpaid"):
+                _flip_tier_by_stripe_customer(db, str(stripe_customer), "free")
+            elif sub_status in ("active", "trialing"):
+                # Idempotent: tier already set by checkout.session.completed.
+                # We re-affirm in case the row was created out of order.
+                _flip_tier_by_stripe_customer(db, str(stripe_customer), "pro")
+            else:
+                LOG.info(
+                    "customer.subscription.updated status=%s (no tier change)",
+                    sub_status,
+                )
+        else:
+            LOG.warning("customer.subscription.updated without customer id")
+
     if event_id:
         _record_event(db, event_id, event_type)
 
@@ -256,3 +357,31 @@ def _flip_tier_by_string(
         LOG.info("Tier flipped to %s for customer_id=%s (%d rows)", new_tier, customer_id_string, len(rows))
     else:
         LOG.warning("Webhook: no customer rows for customer_id=%s", customer_id_string)
+
+
+def _flip_tier_by_stripe_customer(
+    db: Session, stripe_customer_id: str, new_tier: str
+) -> None:
+    """Flip tier for all Customer rows linked to a Stripe customer id.
+
+    Used by subscription.deleted / subscription.updated handlers, which
+    only carry the Stripe customer id (no metadata). The Stripe customer
+    id was persisted on the row by the checkout.session.completed
+    handler.
+    """
+    stmt = select(Customer).where(Customer.stripe_customer_id == stripe_customer_id)
+    rows = db.execute(stmt).scalars().all()
+    if not rows:
+        LOG.warning(
+            "Webhook: no customer rows for stripe_customer_id=%s", stripe_customer_id
+        )
+        return
+    for customer in rows:
+        customer.tier = new_tier
+    db.commit()
+    LOG.info(
+        "Tier flipped to %s for stripe_customer_id=%s (%d rows)",
+        new_tier,
+        stripe_customer_id,
+        len(rows),
+    )

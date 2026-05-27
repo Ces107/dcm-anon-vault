@@ -13,3 +13,6 @@ build/
 .ruff_cache/
 .pytest_cache/
 *.whl
+.coverage
+.coverage.*
+htmlcov/

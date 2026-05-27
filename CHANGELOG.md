@@ -3,6 +3,71 @@
 All notable changes to dcm-anon-vault are documented here.
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) — semver.
 
+## [0.3.0] — 2026-05-20
+
+Enterprise-grade controls layer. No breaking changes to the existing
+API-key + billing path; all additions are opt-in via env vars / new
+endpoints.
+
+### Added
+- **Tamper-evident audit chain** on `anonymization_events`: each row
+  stores `prev_hash` + `row_hash` (SHA-256 over canonical-JSON of the
+  prior row's full state). New admin endpoint
+  `GET /v1/audit/verify` walks the chain and returns OK or the first
+  broken row id. See `docs/security.md` § Audit chain.
+- **Per-tenant rate-limiting** middleware (`rate_limit.py`). Fixed-window
+  60-s counter; limits taken from `Customer.rate_limit_per_minute`
+  override, else `DCM_RATE_LIMIT_<TIER>` env, else built-in tier
+  defaults (`free=30/min`, `pro=600/min`, `enterprise=6000/min`). 429
+  with `Retry-After` on hit.
+- **Prometheus `/metrics`** endpoint exposing
+  `anonymize_requests_total{tenant,status}`,
+  `anonymize_bytes_processed_total{tenant}`,
+  `billing_events_total{tenant,kind}`. Scrape-friendly, no auth (mount
+  behind a private network or auth proxy).
+- **Structured JSON access logs** via `RequestLogMiddleware` +
+  `JsonFormatter`. One line per request with `ts`, `level`,
+  `request_id`, `tenant`, `route`, `method`, `status`, `duration_ms`.
+  Disable via `DCM_DISABLE_JSON_LOG=1`.
+- **Outgoing webhooks** with retries + dead-letter queue.
+  `POST /v1/webhooks` registers a URL + secret; on
+  `anonymize.completed` the service POSTs a signed payload
+  (`X-Webhook-Signature: sha256=<hex>`). 3 attempts (1 s / 5 s / 25 s);
+  on final failure a row lands in `webhook_deadletter`, inspectable
+  via admin `GET /v1/webhooks/deadletter`.
+- **OIDC Bearer-token authentication** as an alternative to API-key.
+  Enabled when `OIDC_DISCOVERY_URL` is set; otherwise the API-key path
+  remains the sole auth method. `JwksOidcAuthenticator` fetches the
+  JWKS, caches keys with 5 min TTL, validates RS256 JWTs.
+- **GDPR Art 17 retention sweep**. `Customer.retention_days` (default
+  30) drives deletion of expired `AnonymizationEvent` and
+  `WebhookDeadletter` rows. Admin endpoint
+  `POST /v1/admin/retention/sweep` triggers a per-tenant sweep;
+  schedule via cron / k8s CronJob.
+- **Admin role gate** via `require_admin` dependency. Admins listed
+  in `DCM_ADMIN_KEYS` (comma-separated customer_id values).
+- New deps: `prometheus-client`, `python-jose[cryptography]`, `httpx`.
+- Documentation: `docs/api.md`, `docs/deploy.md`, `docs/security.md`,
+  `docs/compliance.md`, `docs/openapi.json`.
+
+### Changed
+- Middleware stack reorder: `RequestLog → APIKey → RateLimit` so the
+  rate-limiter can read `request.state.api_key_hash` set by
+  `APIKeyMiddleware`.
+- `customers` table gains `rate_limit_per_minute` (nullable) and
+  `retention_days` (default 30) columns. Existing rows unaffected
+  (`create_all` is additive on SQLite + Postgres).
+- `anonymization_events` table gains `prev_hash` and `row_hash` columns
+  (both 64-char hex). Existing rows: hash chain starts from the next
+  insert; running `/v1/audit/verify` against a pre-0.3 dataset will
+  flag the first new-format row only.
+
+### Security
+- All new endpoints under `/v1/audit/*`, `/v1/webhooks/deadletter`,
+  `/v1/admin/*` are admin-gated.
+- Webhook signature uses HMAC-SHA256 with per-tenant secret.
+- `bandit -r src/` clean (zero HIGH severity issues).
+
 ## [0.2.0] — 2026-05-19
 
 ### Added

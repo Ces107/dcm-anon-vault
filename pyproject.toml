@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "dcm-anon-vault"
-version = "0.2.1"
+version = "0.3.0"
 description = "Hosted single-tenant DICOM pseudonymization API wrapping dcm-anonymizer (PS3.15 Basic Profile)"
 readme = "README.md"
 license = {text = "MIT"}
@@ -33,16 +33,21 @@ dependencies = [
     "stripe>=8.0,<13.0",
     "pydicom>=3.0.2,<4.0",
     "dcm-anonymizer>=0.4.0,<0.5",
+    "prometheus-client>=0.20,<1.0",
+    "python-jose[cryptography]>=3.3,<4.0",
+    "httpx>=0.27,<1.0",
 ]
 
 [project.optional-dependencies]
 dev = [
     "pytest>=8.0",
+    "pytest-cov>=4.0",
     "httpx>=0.27",
     "ruff>=0.4",
     "mypy>=1.8",
     "build>=1.0",
     "pip-audit>=2.7",
+    "bandit>=1.7",
 ]
 
 [project.urls]

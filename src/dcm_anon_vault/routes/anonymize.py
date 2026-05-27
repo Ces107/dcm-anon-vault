@@ -12,10 +12,16 @@ from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from dcm_anon_vault.audit_chain import finalize_event_id, stamp_event
 from dcm_anon_vault.auth import require_api_key_hash, require_customer
-from dcm_anon_vault.core import BurnedInPHIError, anonymize_files_to_zip
+from dcm_anon_vault.core import AuditSummary, BurnedInPHIError, anonymize_files_to_zip
 from dcm_anon_vault.db import get_db
+from dcm_anon_vault.metrics import (
+    record_anonymize_bytes,
+    record_anonymize_request,
+)
 from dcm_anon_vault.models import AnonymizationEvent, Customer
+from dcm_anon_vault.webhook_delivery import deliver_to_customer
 
 router = APIRouter()
 
@@ -98,6 +104,49 @@ def anonymize(
     customers to 50 files / UTC calendar month. Rejects files declaring
     ``BurnedInAnnotation == YES`` (no Clean Pixel Data Option).
     """
+    try:
+        resp, summary, customer_pk = _anonymize_impl(
+            request, files, customer_id, api_key_hash, db
+        )
+    except HTTPException as exc:
+        record_anonymize_request(customer_id, exc.status_code)
+        raise
+    except Exception:
+        record_anonymize_request(customer_id, 500)
+        raise
+
+    record_anonymize_request(customer_id, 200)
+
+    # Best-effort webhook fan-out (sync wrapper around async). Failures
+    # are deadlettered, never break the upload response.
+    try:
+        import asyncio
+
+        asyncio.run(
+            deliver_to_customer(
+                db,
+                customer_id=customer_pk,
+                event_type="anonymize.completed",
+                payload={
+                    "files_processed": summary.files_processed,
+                    "audit_sha256": summary.audit_sha256,
+                },
+            )
+        )
+    except Exception:
+        # Webhook errors must not break the user's anonymize call.
+        pass
+
+    return resp
+
+
+def _anonymize_impl(
+    request: Request,
+    files: list[UploadFile],
+    customer_id: str,
+    api_key_hash: str,
+    db: Session,
+) -> tuple[Response, AuditSummary, int]:
     _enforce_size_cap(request)
     customer = _get_or_create_customer(
         db, customer_id=customer_id, api_key_hash=api_key_hash
@@ -148,6 +197,8 @@ def anonymize(
                     out.write(chunk)
             src_paths.append(dest)
 
+        record_anonymize_bytes(customer_id, bytes_seen)
+
         try:
             zip_bytes, summary = anonymize_files_to_zip(
                 src_paths, customer_salt=api_key_hash
@@ -171,8 +222,14 @@ def anonymize(
         customer_id=customer.id,
         file_count=summary.files_processed,
         audit_sha256=summary.audit_sha256,
+        created_at=datetime.now(timezone.utc),
     )
+    # Hash chain: stamp prev_hash + row_hash. We flush to obtain the
+    # autoincrement id, then recompute row_hash so the id is included.
+    stamp_event(db, event)
     db.add(event)
+    db.flush()
+    finalize_event_id(db, event)
     db.commit()
 
     headers = {
@@ -182,7 +239,13 @@ def anonymize(
         "X-Files-Rejected-BurnedIn": str(summary.files_rejected_burned_in),
         "X-Audit-Sha256": summary.audit_sha256,
     }
-    return Response(content=zip_bytes, media_type="application/zip", headers=headers)
+    return (
+        Response(content=zip_bytes, media_type="application/zip", headers=headers),
+        summary,
+        customer.id,
+    )
+
+
 
 
 __all__ = ["anonymize", "router"]

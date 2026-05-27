@@ -17,6 +17,7 @@ from sqlalchemy.pool import StaticPool
 from dcm_anon_vault.app import app
 from dcm_anon_vault.db import get_db
 from dcm_anon_vault.models import Base
+from dcm_anon_vault.rate_limit import get_limiter, set_session_factory_for_test
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -67,6 +68,19 @@ def db_session(
 def set_api_keys_env(monkeypatch: pytest.MonkeyPatch) -> None:
     """Set DCM_API_KEYS so the middleware recognises the test key."""
     monkeypatch.setenv("DCM_API_KEYS", f"{TEST_CUSTOMER_ID}:{TEST_KEY}")
+    # Generous per-tier rate limit for tests; specific tests override.
+    monkeypatch.setenv("DCM_RATE_LIMIT_FREE", "10000")
+    monkeypatch.setenv("DCM_RATE_LIMIT_PRO", "10000")
+    # Quiet the JSON access log in tests; specific tests can re-enable.
+    monkeypatch.setenv("DCM_DISABLE_JSON_LOG", "1")
+
+
+@pytest.fixture(autouse=True)
+def _reset_limiter() -> Generator[None, None, None]:
+    """Clear the in-process rate-limit windows between tests."""
+    get_limiter().reset()
+    yield
+    get_limiter().reset()
 
 
 # ---------------------------------------------------------------------------
@@ -86,6 +100,7 @@ def client(db_engine: sqlalchemy.engine.Engine) -> Generator[TestClient, None, N
             session.close()
 
     app.dependency_overrides[get_db] = override_get_db
+    set_session_factory_for_test(factory)
 
     # Patch init_db so the lifespan startup doesn't create tables on the
     # module-level engine (tables are already created on the test engine above).
@@ -94,6 +109,7 @@ def client(db_engine: sqlalchemy.engine.Engine) -> Generator[TestClient, None, N
             yield c
 
     app.dependency_overrides.clear()
+    set_session_factory_for_test(None)
 
 
 # ---------------------------------------------------------------------------

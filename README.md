@@ -77,13 +77,15 @@ access by subscription, the hosted vault is the right tool.
 | Free | €0/mo | 50 files/month | Shared single-tenant |
 | Pro  | €99/mo | Fair-use 10K files/mo | Single-tenant (your own deploy) |
 | Annual | €999/yr | Fair-use 10K files/mo | Same as Pro; ~17 % off |
-| Enterprise | Contact | SLA, BAA, async jobs, SSO | Isolated VPS, dedicated support |
+| Enterprise | from €1,200/mo | SLA, BAA, OIDC SSO, 6-yr audit retention, dedicated support | Isolated VPS, dedicated support |
 
-Free-tier customers receive `429 Too Many Requests` with a `Retry-After`
-header once they hit the monthly cap. Upgrading via Stripe Checkout
-flips the tier in the database on signed-webhook receipt.
+See [`pricing.md`](./pricing.md) for the full pricing page, payment instruments, refund terms, and how to start. EU buyers may pay by SEPA bank transfer against a manual invoice while the Stripe live keys finish wiring; contact `plusultra.dev@proton.me`.
 
-A 14-day Pro trial is enabled by default (`STRIPE_TRIAL_DAYS=14`).
+Free-tier customers receive `429 Too Many Requests` with a `Retry-After` header and an `X-Upgrade-URL` hint once they hit the monthly cap. Upgrading via Stripe Checkout flips the tier in the database on signed-webhook receipt.
+
+A 14-day Pro trial is enabled by default through Stripe Checkout (`STRIPE_TRIAL_DAYS=14`). No separate trial-signup endpoint is required: hit `POST /v1/billing/checkout-session` (see §5) and the trial activates automatically.
+
+**Why not Niffler, MIRC CTP, or the upstream `dcm-anonymizer` CLI?** Vault adds hosted deployment, multi-user API keys with per-tier quotas, persisted SHA-256 audit chain queryable via `GET /v1/audit/verify`, Stripe billing, and deterministic UID re-mapping for longitudinal cohort linkage. See [`docs/COMPARISON.md`](./docs/COMPARISON.md) for the full matrix with honest "when the alternative wins" callouts.
 
 ---
 
