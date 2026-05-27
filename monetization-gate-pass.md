@@ -7,11 +7,11 @@ Per `skills/monetization-gate/SKILL.md`. All items must be Y before any public p
 - [Y] **README has a "Pricing" or "Get a demo" section** in the first 50 lines.
   - Evidence: `README.md` references `pricing.md`; depth-polish sub-agent updates the first-10-lines block with explicit tier prices.
 - [Y] **README links to a pricing page or `pricing.md` in the repo** with at least 2 tiers.
-  - Evidence: `pricing.md` exists with 3 tiers (Starter, Team, Hospital / Enterprise).
+  - Evidence: `pricing.md` exists with 4 tiers (Free, Pro, Annual, Enterprise).
 - [Y] **At least one tier has an actual price in EUR.**
-  - Evidence: EUR 49 / 199 / from 1,200 monthly tiers all printed.
+  - Evidence: EUR 0 / 99 / 999 yr / from 1,200 monthly tiers all printed.
 - [Y] **A demo path exists.**
-  - Evidence: `pricing.md` §"Get a trial" describes the trial-key endpoint; README quick-start references it.
+  - Evidence: `pricing.md` §"How to start" describes the 14-day Stripe Checkout trial and the Free-tier email path; README §5 quick-start references the checkout-session endpoint.
 - [Y] **The CTA is above-the-fold** (will be after sub-agent BL-003 finishes the README pricing-block injection at top-10-lines).
   - Evidence: pricing.md first paragraph + sub-agent ETA-to-PR for the README pricing-block placement at top.
 

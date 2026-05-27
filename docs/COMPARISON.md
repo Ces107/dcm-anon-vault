@@ -25,9 +25,9 @@ You can pseudonymize DICOM files in many ways. This doc explains where dcm-anon-
 |------|---------|----------------|
 | Deployment | Self-host | Hosted API or self-host |
 | Audit trail | Custom; per-deployment | Tamper-evident sha256 chain, default-on |
-| Tenant isolation | Single-tenant per deployment | Multi-tenant with per-API-key isolation (Team / Enterprise) |
+| Tenant isolation | Single-tenant per deployment | Multi-tenant with per-API-key isolation (Pro / Enterprise) |
 | Compliance posture | "De-identification"; HIPAA framing | "Pseudonymization"; WP29 Op. 05/2014 + EDPB 01/2025 framing |
-| Billing | Free OSS | Tiered subscription + overage |
+| Billing | Free OSS | Tiered subscription (Free / Pro / Annual / Enterprise) |
 | EU anchoring | Light | Primary |
 
 **When Niffler wins:** large research consortia with in-house DevOps, comfortable building the rest of the stack. Free.
@@ -124,7 +124,7 @@ Decision tree:
 
 1. Do you need an HTTP API that returns pseudonymized DICOM and a hash-chained audit log? **Yes →** dcm-anon-vault is the simplest fit. **No →** consider the CLI alternatives.
 2. Do you need very complex rules (multiple study types, multiple sponsors, custom mapping per project)? **Yes →** MIRC CTP. **No →** dcm-anon-vault.
-3. Do you need multi-tenant isolation with per-tenant billing? **Yes →** dcm-anon-vault (Team or Enterprise tier). **No →** any of the free CLIs.
+3. Do you need multi-tenant isolation with per-tenant billing? **Yes →** dcm-anon-vault (Pro or Enterprise tier). **No →** any of the free CLIs.
 4. Are you EU and need an EU-anchored data-protection posture documented? **Yes →** dcm-anon-vault. **No →** US-anchored tools are fine.
 5. Are you cost-sensitive and have engineering time? **Yes →** build on the free CLIs. **No →** dcm-anon-vault.
 

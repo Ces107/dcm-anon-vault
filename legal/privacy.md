@@ -33,7 +33,7 @@ For the Customer's own business contact data (account holder name, email, billin
 
 DICOM files uploaded for pseudonymization typically contain personal data of patients in tag headers (Patient Name, Patient ID, Birth Date, Referring Physician, etc.) and pixel data (where burned-in text is present). Our processing rewrites these tags per the PS3.15 Basic Confidentiality Profile and discards original mappings within the request lifecycle except where the Customer's tier explicitly retains them (Enterprise tier audit chain).
 
-We do **not** decode pixel-data text. Customers requiring burned-in-text scrubbing should pre-process before upload or use the upcoming dicom-sr-scrubber companion product.
+We do **not** decode pixel-data text. Customers requiring burned-in-text scrubbing should pre-process before upload (files declaring `BurnedInAnnotation==YES` are rejected with HTTP 422 rather than processed).
 
 ### 3.3 Audit log (we are processor)
 
@@ -71,7 +71,7 @@ Any transfers outside the EEA are covered by adequacy decisions, Standard Contra
 
 - **Customer contact / billing data:** duration of the relationship plus 6 years for tax compliance, then deleted.
 - **DICOM file content:** request-lifetime only; deleted after pseudonymization and delivery, except for the Enterprise tier audit chain artefacts retained per the tier specification (default 6 years; configurable down to 30 days).
-- **Audit log entries:** retention per tier (30 days Starter, 1 year Team, 6 years Enterprise; configurable Enterprise).
+- **Audit log entries:** retention per tier (30 days Free, 1 year Pro / Annual, 6 years Enterprise; configurable Enterprise).
 - **Backups:** rolling 30 day window, encrypted.
 - **Marketing contact data (where explicit consent obtained):** retained until consent withdrawal or 3 years of inactivity.
 

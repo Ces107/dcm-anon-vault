@@ -18,7 +18,11 @@ build/
 htmlcov/
 demo/audit/
 demo/demo-vault.db
+demo/demo-vault.db-shm
+demo/demo-vault.db-wal
 demo/server.log
 demo/result.zip
+demo/headers-anon.txt
 demo/sample_*.dcm
+demo/sample_with_phi.dcm
 nohup.out

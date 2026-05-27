@@ -30,7 +30,7 @@ incoherent for a piece of code.
 | Art 25 — data protection by design | Embed safeguards in processing. | **Software-provided.** Default-deny auth, signed webhooks (in and out), strict upload cap, burned-in-PHI refusal, rate-limit per tenant. |
 | Art 32 — security of processing | Pseudonymisation, integrity, availability, regular testing. | **Software-provided + customer-configured.** Pseudonymisation = PS3.15 engine; integrity = audit chain; availability = customer's infra; regular testing = `bandit` + `pip-audit` in CI (this repo) + customer pen-tests. |
 | Art 33 / 34 — breach notification | Notify supervisory authority / data subjects within 72 h. | **Out of scope.** Process belongs to the operator's DPO. The audit chain helps establish breach scope. |
-| Art 28 — processor obligations + DPA | Written contract between controller and processor. | **Out of scope (legal).** Template DPA published separately at `/legal/dpa` (work in progress). |
+| Art 28 — processor obligations + DPA | Written contract between controller and processor. | **Out of scope (legal).** Template DPA published at `legal/dpa-template.md`, executable on Customer request. |
 | EDPB Guidelines 01/2025 — pseudonymisation | Pseudonymised data ≠ anonymous; remains personal data. | **Software-provided.** README and customer-facing copy uses "pseudonymisation" everywhere; no overclaim of anonymisation. |
 
 ## HIPAA Technical Safeguards (45 CFR §164.312)

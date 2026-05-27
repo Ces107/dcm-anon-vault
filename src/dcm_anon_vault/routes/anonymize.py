@@ -6,7 +6,15 @@ import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, HTTPException, Request, UploadFile, status
+from fastapi import (
+    APIRouter,
+    BackgroundTasks,
+    Depends,
+    HTTPException,
+    Request,
+    UploadFile,
+    status,
+)
 from fastapi.responses import Response
 from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
@@ -76,6 +84,40 @@ def _safe_filename(name: str | None) -> str:
     return Path(name).name or "upload.dcm"
 
 
+def _fan_out_webhooks_bg(
+    *, customer_pk: int, event_type: str, payload: dict[str, object]
+) -> None:
+    """Deliver outgoing webhooks on its own DB session, off the request path.
+
+    Runs as a FastAPI BackgroundTask AFTER the anonymize response has been
+    sent, so a slow or dead customer webhook endpoint (timeout 5 s, 3-retry
+    backoff up to 31 s) never stalls the user's upload response. Opens its
+    own short-lived session because the request-scoped session is already
+    closed by the time a background task runs.
+    """
+    import asyncio
+
+    from dcm_anon_vault.db import _get_session_factory
+
+    db = _get_session_factory()()
+    try:
+        asyncio.run(
+            deliver_to_customer(
+                db,
+                customer_id=customer_pk,
+                event_type=event_type,
+                payload=payload,
+            )
+        )
+    except Exception:
+        # Background best-effort: delivery failures are deadlettered inside
+        # deliver_to_customer; anything escaping here is swallowed so the
+        # background worker does not crash.
+        pass
+    finally:
+        db.close()
+
+
 def _enforce_size_cap(request: Request) -> None:
     """Reject requests whose Content-Length exceeds the cap."""
     cl = request.headers.get("content-length")
@@ -94,6 +136,7 @@ def _enforce_size_cap(request: Request) -> None:
 def anonymize(
     request: Request,
     files: list[UploadFile],
+    background_tasks: BackgroundTasks,
     customer_id: str = Depends(require_customer),
     api_key_hash: str = Depends(require_api_key_hash),
     db: Session = Depends(get_db),
@@ -117,25 +160,19 @@ def anonymize(
 
     record_anonymize_request(customer_id, 200)
 
-    # Best-effort webhook fan-out (sync wrapper around async). Failures
-    # are deadlettered, never break the upload response.
-    try:
-        import asyncio
-
-        asyncio.run(
-            deliver_to_customer(
-                db,
-                customer_id=customer_pk,
-                event_type="anonymize.completed",
-                payload={
-                    "files_processed": summary.files_processed,
-                    "audit_sha256": summary.audit_sha256,
-                },
-            )
-        )
-    except Exception:
-        # Webhook errors must not break the user's anonymize call.
-        pass
+    # Webhook fan-out runs AFTER the response is sent (BackgroundTask), on
+    # its own DB session. A slow/dead customer endpoint (5 s timeout, retry
+    # backoff up to 31 s) must not stall the user's upload response. Failures
+    # are deadlettered inside deliver_to_customer.
+    background_tasks.add_task(
+        _fan_out_webhooks_bg,
+        customer_pk=customer_pk,
+        event_type="anonymize.completed",
+        payload={
+            "files_processed": summary.files_processed,
+            "audit_sha256": summary.audit_sha256,
+        },
+    )
 
     return resp
 

@@ -60,7 +60,7 @@ TOTAL DUE:             EUR [amount]
 
 Payment instructions:
   - Bank transfer (EUR): IBAN [TO PROVIDE], BIC [TO PROVIDE].
-  - Stripe Payment Link: [Stripe Payment Link — wiring 2026-05-21].
+  - Stripe Payment Link or SEPA bank transfer (see pricing.md, Payment section).
   - Reference / Concepto: invoice-[YYYY-NNNN]
 
 Late payment: statutory commercial interest per Spanish Ley 3/2004 transposing Dir. 2011/7/EU.

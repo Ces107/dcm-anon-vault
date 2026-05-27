@@ -109,7 +109,8 @@ fly secrets set \
   STRIPE_WEBHOOK_SECRET="whsec_REAL_SECRET_HERE"
 
 fly deploy
-curl https://dcm-anon-vault.fly.dev/health
+# Replace <your-app> with the app name you chose in `fly apps create`.
+curl https://<your-app>.fly.dev/health
 ```
 
 **Required Stripe configuration before any paid customer:**
@@ -184,7 +185,7 @@ data and must be handled accordingly. The hosted plane **receives and
 briefly processes raw PHI on the customer's behalf**, which makes the
 operator a processor under GDPR Art 4(8). A Data Processing Agreement
 (DPA) is required before any EU customer can be onboarded; we publish
-a template DPA at `/legal/dpa` (work in progress).
+a template DPA at [`legal/dpa-template.md`](./legal/dpa-template.md).
 
 **HIPAA posture.** Receiving raw DICOM from a US Covered Entity makes
 the operator a Business Associate by operation of law (45 CFR 160.103),
