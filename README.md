@@ -5,7 +5,24 @@ files over HTTP, get back a ZIP of pseudonymized outputs plus a
 tamper-evident audit log. Stripe billing is built in for pay-as-you-go
 tier enforcement.
 
-> **Wording note** — In DICOM and clinical-research practice the
+Free tier: 50 files/mo. Pro: €99/mo (10K files). Annual: €999.
+`pip install -e ".[dev]"` then `uvicorn dcm_anon_vault.app:app`.
+Enterprise: OIDC, per-tenant rate limits, tamper-evident audit chain,
+GDPR Art 17 retention policies, Prometheus metrics, signed outbound
+webhooks. See `docs/security.md` and `docs/compliance.md`.
+
+## What's new in 0.3
+
+- Tamper-evident audit hash chain + `GET /v1/audit/verify`.
+- Per-tenant rate limiting (429 + `Retry-After`).
+- Prometheus `/metrics` endpoint.
+- Structured JSON access logs with `request_id` / `tenant` / `duration_ms`.
+- Outgoing webhook delivery with retries + dead-letter queue.
+- OIDC Bearer-token auth (alternative to API-key, optional).
+- GDPR Art 17 retention sweep (per-tenant `retention_days`).
+- See `CHANGELOG.md` for the full list.
+
+> **Wording note:** In DICOM and clinical-research practice the
 > process is colloquially called "anonymization" (and the upstream
 > engine ships as `dcm-anonymizer`). Under EU GDPR (Recital 26 + WP29
 > Opinion 05/2014 + EDPB Guidelines 01/2025) the OUTPUT of PS3.15 Basic
@@ -32,7 +49,7 @@ ever leaves the machine you deploy on.
 
 UID re-mapping is **deterministic per customer** (we use
 `SHA-256(api_key)` as the engine salt), so re-running the same source
-study produces the same target SOPInstanceUID / PatientID — enabling
+study produces the same target SOPInstanceUID / PatientID. This enables
 longitudinal cohort linkage that random UIDs would destroy.
 
 ---
@@ -98,8 +115,8 @@ curl https://dcm-anon-vault.fly.dev/health
 - Optional annual price → `STRIPE_PRICE_ID_ANNUAL`.
 - Webhook endpoint at `https://<your-app>/v1/billing/webhook` pointing
   at the events: `checkout.session.completed`. Copy the signing
-  secret into `STRIPE_WEBHOOK_SECRET` — **the service refuses to
-  process unsigned events.**
+  secret into `STRIPE_WEBHOOK_SECRET`. The service refuses to
+  process unsigned events.
 
 ---
 
@@ -183,7 +200,7 @@ removal; we reject files declaring `BurnedInAnnotation==YES` with HTTP
 422 rather than silently leak PHI. No SR (Structured Report) text-item
 deep redaction (only the engine's PS3.15 actions). No IHE BIR / ATNA
 audit message emission. No KMS-backed encryption. No Conformance
-Statement (PS3.4 §2.2) — write to us if you need one for a hospital
+Statement (PS3.4 §2.2). Write to us if you need one for a hospital
 procurement evaluation.
 
 This README is the canonical scope statement. Marketing copy MUST
@@ -194,6 +211,6 @@ https://github.com/Ces107/dcm-anon-vault/issues
 
 ---
 
-Copyright © 2026 César Pereiro García — MIT License. See `NOTICE.md`
+Copyright © 2026 César Pereiro García. MIT License. See `NOTICE.md`
 for upstream attribution; `SECURITY.md` for vulnerability reporting;
 `CHANGELOG.md` for release history.
