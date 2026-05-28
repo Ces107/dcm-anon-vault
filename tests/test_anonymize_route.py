@@ -126,3 +126,38 @@ class TestAnonymizeRoute:
                 )
         assert resp.status_code == 429
         assert "Retry-After" in resp.headers
+
+
+class TestFanOutWebhooksBg:
+    """TD-045: setup-path failures in _fan_out_webhooks_bg must NOT be silent."""
+
+    def test_session_factory_failure_is_logged_not_silent(
+        self,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        import logging
+
+        from dcm_anon_vault.routes.anonymize import _fan_out_webhooks_bg
+
+        caplog.set_level(logging.WARNING, logger="dcm_anon_vault.webhooks")
+
+        def _boom() -> object:
+            raise RuntimeError("DB pool exhausted")
+
+        with patch("dcm_anon_vault.db._get_session_factory", return_value=_boom):
+            _fan_out_webhooks_bg(
+                customer_pk=42,
+                event_type="anonymize.completed",
+                payload={"foo": "bar"},
+            )
+
+        warning_records = [
+            r for r in caplog.records if r.levelno == logging.WARNING
+        ]
+        assert len(warning_records) == 1
+        rec = warning_records[0]
+        assert "background webhook fan-out failed" in rec.getMessage()
+        assert rec.customer_pk == 42
+        assert rec.event_type == "anonymize.completed"
+        assert rec.error_type == "RuntimeError"
+        assert "DB pool exhausted" in rec.error

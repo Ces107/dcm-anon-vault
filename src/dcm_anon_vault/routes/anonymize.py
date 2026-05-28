@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
@@ -32,6 +33,8 @@ from dcm_anon_vault.models import AnonymizationEvent, Customer
 from dcm_anon_vault.webhook_delivery import deliver_to_customer
 
 router = APIRouter()
+
+LOG = logging.getLogger("dcm_anon_vault.webhooks")
 
 _FREE_TIER_MONTHLY_LIMIT = 50
 _MAX_UPLOAD_BYTES = 100 * 1024 * 1024  # 100 MB per request (multipart total)
@@ -99,8 +102,9 @@ def _fan_out_webhooks_bg(
 
     from dcm_anon_vault.db import _get_session_factory
 
-    db = _get_session_factory()()
+    db = None
     try:
+        db = _get_session_factory()()
         asyncio.run(
             deliver_to_customer(
                 db,
@@ -109,13 +113,24 @@ def _fan_out_webhooks_bg(
                 payload=payload,
             )
         )
-    except Exception:
+    except Exception as exc:  # TD-045: setup + delivery + cleanup were silent
         # Background best-effort: delivery failures are deadlettered inside
         # deliver_to_customer; anything escaping here is swallowed so the
-        # background worker does not crash.
-        pass
+        # background worker does not crash. We DO log so a DB-pool / import
+        # / event-loop failure is at least visible in structured logs with
+        # enough context to triage (customer + event + error type).
+        LOG.warning(
+            "background webhook fan-out failed",
+            extra={
+                "customer_pk": customer_pk,
+                "event_type": event_type,
+                "error": str(exc),
+                "error_type": type(exc).__name__,
+            },
+        )
     finally:
-        db.close()
+        if db is not None:
+            db.close()
 
 
 def _enforce_size_cap(request: Request) -> None:
