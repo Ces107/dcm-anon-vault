@@ -119,8 +119,10 @@ class OutgoingWebhook(Base):
 class WebhookDeadletter(Base):
     """Final-failure record for an outgoing webhook delivery.
 
-    Populated after all retries (3 attempts: 1 s / 5 s / 25 s) are
-    exhausted. Inspect via ``GET /v1/webhooks/deadletter``.
+    Populated after all configured retries are exhausted. The default
+    backoff is 3 attempts (1 s / 5 s / 25 s); the BackgroundTask fan-out
+    in ``routes/anonymize.py`` uses a shorter 2-attempt backoff (TD-046).
+    Inspect via ``GET /v1/webhooks/deadletter``.
     """
 
     __tablename__ = "webhook_deadletter"

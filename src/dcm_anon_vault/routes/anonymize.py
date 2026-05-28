@@ -40,6 +40,14 @@ _FREE_TIER_MONTHLY_LIMIT = 50
 _MAX_UPLOAD_BYTES = 100 * 1024 * 1024  # 100 MB per request (multipart total)
 _STREAM_CHUNK = 64 * 1024
 
+# TD-046: shorter than webhook_delivery.DEFAULT_BACKOFF (1, 5, 25) so each
+# background fan-out bounds threadpool occupancy at ~10.5 s per dead target
+# (5 s HTTP timeout + 0.5 s sleep + 5 s HTTP timeout; the trailing sleep is
+# gated off by `if attempt < len(backoff)` in deliver_with_retries). Loses
+# one transient-5xx retry vs the library default; deadletter is unchanged
+# so admin can replay via /v1/webhooks/deadletter.
+_BG_WEBHOOK_BACKOFF: tuple[float, ...] = (0.5, 2.0)
+
 
 def _get_or_create_customer(
     db: Session, *, customer_id: str, api_key_hash: str
@@ -93,10 +101,14 @@ def _fan_out_webhooks_bg(
     """Deliver outgoing webhooks on its own DB session, off the request path.
 
     Runs as a FastAPI BackgroundTask AFTER the anonymize response has been
-    sent, so a slow or dead customer webhook endpoint (timeout 5 s, 3-retry
-    backoff up to 31 s) never stalls the user's upload response. Opens its
-    own short-lived session because the request-scoped session is already
-    closed by the time a background task runs.
+    sent. Uses ``_BG_WEBHOOK_BACKOFF`` (shorter than the library default) so
+    a slow or dead customer endpoint bounds at ~10.5 s per target instead of
+    ~21 s, protecting the Starlette threadpool from saturation under burst
+    load to dead endpoints (TD-046). Final delivery failures still write a
+    ``WebhookDeadletter`` row inside ``deliver_to_customer``; admin can
+    replay via ``GET /v1/webhooks/deadletter``. Opens a short-lived session
+    because the request-scoped session is already closed by the time a
+    background task runs.
     """
     import asyncio
 
@@ -111,6 +123,7 @@ def _fan_out_webhooks_bg(
                 customer_id=customer_pk,
                 event_type=event_type,
                 payload=payload,
+                backoff=_BG_WEBHOOK_BACKOFF,
             )
         )
     except Exception as exc:  # TD-045: setup + delivery + cleanup were silent
@@ -176,9 +189,10 @@ def anonymize(
     record_anonymize_request(customer_id, 200)
 
     # Webhook fan-out runs AFTER the response is sent (BackgroundTask), on
-    # its own DB session. A slow/dead customer endpoint (5 s timeout, retry
-    # backoff up to 31 s) must not stall the user's upload response. Failures
-    # are deadlettered inside deliver_to_customer.
+    # its own DB session. A slow/dead customer endpoint (5 s timeout, 2-retry
+    # backoff capped at ~10.5 s per target — see _BG_WEBHOOK_BACKOFF, TD-046)
+    # must not stall the user's upload response. Failures are deadlettered
+    # inside deliver_to_customer.
     background_tasks.add_task(
         _fan_out_webhooks_bg,
         customer_pk=customer_pk,

@@ -3,7 +3,11 @@
 Customers register a URL via ``POST /v1/webhooks`` to receive event
 notifications (e.g. ``anonymize.completed``). Delivery semantics:
 
-* 3 attempts with backoff 1 s → 5 s → 25 s.
+* Default: 3 attempts with backoff 1 s → 5 s → 25 s (``DEFAULT_BACKOFF``).
+* The ``_fan_out_webhooks_bg`` call site in ``routes/anonymize.py``
+  overrides this with a shorter ``(0.5, 2.0)`` 2-attempt backoff
+  (``_BG_WEBHOOK_BACKOFF``) to protect the Starlette threadpool when
+  customers have dead endpoints (TD-046).
 * HMAC-SHA256 signature over the JSON payload using the customer's
   registered ``secret`` (``X-Webhook-Signature: sha256=<hex>``).
 * On final failure, a row is inserted into ``webhook_deadletter``;
@@ -11,9 +15,9 @@ notifications (e.g. ``anonymize.completed``). Delivery semantics:
 
 The deliver function is **synchronous-friendly** (it uses ``httpx``
 sync client) and bounded by a small inline thread (started by the
-caller). For higher-throughput deployments swap in a task queue
-(Celery / Arq / RQ); the interface here keeps the surface area honest
-about what's implemented.
+caller). For higher-throughput deployments swap in an in-process
+polling worker or external queue; the interface here keeps the surface
+area honest about what's implemented.
 """
 
 from __future__ import annotations

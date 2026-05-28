@@ -161,3 +161,64 @@ class TestFanOutWebhooksBg:
         assert rec.event_type == "anonymize.completed"
         assert rec.error_type == "RuntimeError"
         assert "DB pool exhausted" in rec.error
+
+    def test_uses_short_backoff_not_library_default(self) -> None:
+        """TD-046: bg call site MUST pass _BG_WEBHOOK_BACKOFF, not default.
+
+        Locks in the architectural decision against a future copy-paste
+        regression. If someone drops the backoff kwarg, the threadpool-
+        starvation regression returns silently — this test catches it.
+        """
+        from unittest.mock import MagicMock
+
+        from dcm_anon_vault.routes.anonymize import (
+            _BG_WEBHOOK_BACKOFF,
+            _fan_out_webhooks_bg,
+        )
+
+        recorded: dict[str, object] = {}
+
+        async def _fake_deliver(
+            db: object,
+            *,
+            customer_id: int,
+            event_type: str,
+            payload: dict[str, object],
+            **kwargs: object,
+        ) -> list[object]:
+            recorded["backoff"] = kwargs.get("backoff")
+            recorded["customer_id"] = customer_id
+            recorded["event_type"] = event_type
+            return []
+
+        with patch(
+            "dcm_anon_vault.routes.anonymize.deliver_to_customer",
+            side_effect=_fake_deliver,
+        ), patch(
+            "dcm_anon_vault.db._get_session_factory",
+            return_value=lambda: MagicMock(close=MagicMock()),
+        ):
+            _fan_out_webhooks_bg(
+                customer_pk=7,
+                event_type="anonymize.completed",
+                payload={"ok": True},
+            )
+
+        assert recorded["backoff"] == _BG_WEBHOOK_BACKOFF
+        assert recorded["backoff"] != (1.0, 5.0, 25.0)  # library default
+        assert recorded["customer_id"] == 7
+        assert recorded["event_type"] == "anonymize.completed"
+
+    def test_short_backoff_constant_bounds_attempts_at_two(self) -> None:
+        """TD-046: the constant itself MUST be a 2-tuple.
+
+        deliver_with_retries uses ``len(backoff)`` as the attempt count.
+        A future drift to a 3-tuple silently brings the 21 s worst case
+        back; this test guards the structural invariant.
+        """
+        from dcm_anon_vault.routes.anonymize import _BG_WEBHOOK_BACKOFF
+
+        assert isinstance(_BG_WEBHOOK_BACKOFF, tuple)
+        assert len(_BG_WEBHOOK_BACKOFF) == 2
+        # Each delay < default (1, 5, 25): no individual sleep > 5 s.
+        assert all(d <= 5.0 for d in _BG_WEBHOOK_BACKOFF)

@@ -139,6 +139,52 @@ def test_deadletter_on_final_failure(db_session: sqlalchemy.orm.Session) -> None
     assert payload["files_processed"] == 3
 
 
+def test_deadletter_still_written_with_short_backoff(
+    db_session: sqlalchemy.orm.Session,
+) -> None:
+    """TD-046: 2-tuple backoff (bg path) MUST still produce a deadletter row.
+
+    Guards against a future refactor that accidentally requires
+    ``len(backoff) == 3`` somewhere on the deadletter path.
+    """
+    cust = Customer(
+        api_key_hash="y" * 64, customer_id_string="acme2", tier="free"
+    )
+    db_session.add(cust)
+    db_session.commit()
+    db_session.refresh(cust)
+
+    hook = OutgoingWebhook(
+        customer_id=cust.id, url="https://example.test/h2", secret="s", active=1
+    )
+    db_session.add(hook)
+    db_session.commit()
+
+    def responder(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(503)
+
+    async def run() -> Any:
+        async with _mock_transport(responder) as cli:
+            return await deliver_to_customer(
+                db_session,
+                customer_id=cust.id,
+                event_type="anonymize.completed",
+                payload={"files_processed": 1},
+                backoff=(0.0, 0.0),  # 2-tuple bg-path-shaped
+                client=cli,
+            )
+
+    results = asyncio.run(run())
+    assert len(results) == 1
+    assert results[0].delivered is False
+    assert results[0].attempts == 2
+
+    rows = db_session.query(WebhookDeadletter).all()
+    assert len(rows) == 1
+    assert rows[0].attempts == 2
+    assert rows[0].last_status == 503
+
+
 class TestWebhookRoutes:
     def test_register_and_list_webhook(self, client: TestClient) -> None:
         resp = client.post(
